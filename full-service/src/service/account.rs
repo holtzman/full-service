@@ -4,22 +4,26 @@
 
 use crate::{
     db::{
-        account::{AccountID, AccountModel, MNEMONIC_KEY_DERIVATION_VERSION},
+        account::{AccountID, AccountModel},
         models::Account,
         WalletDbError,
     },
-    service::{ledger::LedgerService, WalletService},
+    service::{
+        ledger::{LedgerService, LedgerServiceError},
+        WalletService,
+    },
+    util::constants::MNEMONIC_KEY_DERIVATION_VERSION,
 };
+use base64;
+use bip39::{Language, Mnemonic, MnemonicType};
+use diesel::Connection;
+use displaydoc::Display;
 use mc_account_keys::RootEntropy;
+use mc_account_keys_slip10;
 use mc_common::logger::log;
 use mc_connection::{BlockchainConnection, UserTxConnection};
 use mc_fog_report_validation::FogPubkeyResolver;
 use mc_ledger_db::Ledger;
-
-use crate::service::ledger::LedgerServiceError;
-use bip39::{Language, Mnemonic, MnemonicType};
-use diesel::Connection;
-use displaydoc::Display;
 
 #[derive(Display, Debug)]
 pub enum AccountServiceError {
@@ -43,6 +47,12 @@ pub enum AccountServiceError {
 
     /// Invalid BIP39 english mnemonic: {0}
     InvalidMnemonic(String),
+
+    /// Error decoding base64: {0}
+    Base64DecodeError(String),
+
+    /// Error decoding private view key: {0}
+    DecodePrivateKeyError(String),
 }
 
 impl From<WalletDbError> for AccountServiceError {
@@ -75,6 +85,24 @@ impl From<LedgerServiceError> for AccountServiceError {
     }
 }
 
+impl From<base64::DecodeError> for AccountServiceError {
+    fn from(src: base64::DecodeError) -> Self {
+        Self::Base64DecodeError(src.to_string())
+    }
+}
+
+impl From<mc_account_keys_slip10::Error> for AccountServiceError {
+    fn from(src: mc_account_keys_slip10::Error) -> Self {
+        Self::Base64DecodeError(src.to_string())
+    }
+}
+
+impl From<mc_util_serial::DecodeError> for AccountServiceError {
+    fn from(src: mc_util_serial::DecodeError) -> Self {
+        Self::DecodePrivateKeyError(src.to_string())
+    }
+}
+
 /// Trait defining the ways in which the wallet can interact with and manage
 /// accounts.
 pub trait AccountService {
@@ -82,12 +110,12 @@ pub trait AccountService {
     fn create_account(
         &self,
         name: Option<String>,
-        fog_report_url: Option<String>,
-        fog_report_id: Option<String>,
-        fog_authority_spki: Option<String>,
+        fog_report_url: String,
+        fog_report_id: String,
+        fog_authority_spki: String,
     ) -> Result<Account, AccountServiceError>;
 
-    /// Import an existing account to the wallet using the entropy.
+    /// Import an existing account to the wallet using the mnemonic.
     #[allow(clippy::too_many_arguments)]
     fn import_account(
         &self,
@@ -96,9 +124,9 @@ pub trait AccountService {
         name: Option<String>,
         first_block_index: Option<u64>,
         next_subaddress_index: Option<u64>,
-        fog_report_url: Option<String>,
-        fog_report_id: Option<String>,
-        fog_authority_spki: Option<String>,
+        fog_report_url: String,
+        fog_report_id: String,
+        fog_authority_spki: String,
     ) -> Result<Account, AccountServiceError>;
 
     /// Import an existing account to the wallet using the entropy.
@@ -109,9 +137,9 @@ pub trait AccountService {
         name: Option<String>,
         first_block_index: Option<u64>,
         next_subaddress_index: Option<u64>,
-        fog_report_url: Option<String>,
-        fog_report_id: Option<String>,
-        fog_authority_spki: Option<String>,
+        fog_report_url: String,
+        fog_report_id: String,
+        fog_authority_spki: String,
     ) -> Result<Account, AccountServiceError>;
 
     /// List accounts in the wallet.
@@ -139,9 +167,9 @@ where
     fn create_account(
         &self,
         name: Option<String>,
-        fog_report_url: Option<String>,
-        fog_report_id: Option<String>,
-        fog_authority_spki: Option<String>,
+        fog_report_url: String,
+        fog_report_id: String,
+        fog_authority_spki: String,
     ) -> Result<Account, AccountServiceError> {
         log::info!(self.logger, "Creating account {:?}", name,);
 
@@ -183,9 +211,9 @@ where
         name: Option<String>,
         first_block_index: Option<u64>,
         next_subaddress_index: Option<u64>,
-        fog_report_url: Option<String>,
-        fog_report_id: Option<String>,
-        fog_authority_spki: Option<String>,
+        fog_report_url: String,
+        fog_report_id: String,
+        fog_authority_spki: String,
     ) -> Result<Account, AccountServiceError> {
         log::info!(
             self.logger,
@@ -236,9 +264,9 @@ where
         name: Option<String>,
         first_block_index: Option<u64>,
         next_subaddress_index: Option<u64>,
-        fog_report_url: Option<String>,
-        fog_report_id: Option<String>,
-        fog_authority_spki: Option<String>,
+        fog_report_url: String,
+        fog_report_id: String,
+        fog_authority_spki: String,
     ) -> Result<Account, AccountServiceError> {
         log::info!(
             self.logger,
@@ -328,7 +356,12 @@ mod tests {
 
         // Create an account.
         let account = service
-            .create_account(Some("A".to_string()), None, None, None)
+            .create_account(
+                Some("A".to_string()),
+                "".to_string(),
+                "".to_string(),
+                "".to_string(),
+            )
             .unwrap();
 
         // Add a transaction, with transaction status.

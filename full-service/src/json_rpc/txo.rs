@@ -192,22 +192,16 @@ mod tests {
             None,
             None,
             "Alice's Main Account",
-            None,
-            None,
-            None,
+            "".to_string(),
+            "".to_string(),
+            "".to_string(),
             &wallet_db.get_conn().unwrap(),
         )
         .unwrap();
 
         // Amount in origin block TXO is 250_000_000 MOB / 16
-        let (txo_hex, _txo, _key_image) = create_test_received_txo(
-            &account_key,
-            0,
-            15_625_000 * MOB as u64,
-            0,
-            &mut rng,
-            &wallet_db,
-        );
+        let (txo_hex, _txo, _key_image) =
+            create_test_received_txo(&account_key, 0, 15_625_000 * MOB, 0, &mut rng, &wallet_db);
 
         let txo_details = db::models::Txo::get(&txo_hex, &wallet_db.get_conn().unwrap())
             .expect("Could not get Txo");

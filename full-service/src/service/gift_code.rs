@@ -734,7 +734,12 @@ mod tests {
 
         // Create our main account for the wallet
         let alice = service
-            .create_account(Some("Alice's Main Account".to_string()), None, None, None)
+            .create_account(
+                Some("Alice's Main Account".to_string()),
+                "".to_string(),
+                "".to_string(),
+                "".to_string(),
+            )
             .unwrap();
 
         // Add a block with a transaction for Alice
@@ -817,10 +822,7 @@ mod tests {
         let balance = service
             .get_balance_for_account(&AccountID(alice.account_id_hex.clone()))
             .unwrap();
-        assert_eq!(
-            balance.unspent,
-            (98 * MOB - Mob::MINIMUM_FEE as i64) as u128
-        );
+        assert_eq!(balance.unspent, (98 * MOB - Mob::MINIMUM_FEE) as u128);
 
         // Verify that we can get the gift_code
         log::info!(logger, "Getting gift code from database");
@@ -837,7 +839,12 @@ mod tests {
         // Claim the gift code to another account
         log::info!(logger, "Creating new account to receive gift code");
         let bob = service
-            .create_account(Some("Bob's Main Account".to_string()), None, None, None)
+            .create_account(
+                Some("Bob's Main Account".to_string()),
+                "".to_string(),
+                "".to_string(),
+                "".to_string(),
+            )
             .unwrap();
         manually_sync_account(
             &ledger_db,
@@ -882,10 +889,7 @@ mod tests {
         let bob_balance = service
             .get_balance_for_account(&AccountID(bob.account_id_hex))
             .unwrap();
-        assert_eq!(
-            bob_balance.unspent,
-            (2 * MOB - Mob::MINIMUM_FEE as i64) as u128
-        )
+        assert_eq!(bob_balance.unspent, (2 * MOB - Mob::MINIMUM_FEE) as u128)
     }
 
     #[test_with_logger]
@@ -899,7 +903,12 @@ mod tests {
 
         // Create our main account for the wallet
         let alice = service
-            .create_account(Some("Alice's Main Account".to_string()), None, None, None)
+            .create_account(
+                Some("Alice's Main Account".to_string()),
+                "".to_string(),
+                "".to_string(),
+                "".to_string(),
+            )
             .unwrap();
 
         // Add a block with a transaction for Alice

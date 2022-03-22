@@ -14,13 +14,14 @@ use mc_fog_report_validation::FogResolver;
 use mc_full_service::{
     check_host,
     config::APIConfig,
-    wallet::{consensus_backed_rocket, validator_backed_rocket, WalletState},
+    wallet::{consensus_backed_rocket, validator_backed_rocket, APIKeyState, WalletState},
     ValidatorLedgerSyncThread, WalletDb, WalletService,
 };
 use mc_ledger_sync::{LedgerSyncServiceThread, PollingNetworkState, ReqwestTransactionsFetcher};
 use mc_validator_api::ValidatorUri;
 use mc_validator_connection::ValidatorConnection;
 use std::{
+    env,
     process::exit,
     sync::{Arc, RwLock},
 };
@@ -107,9 +108,9 @@ fn main() {
 
     // Start WalletService based on our configuration
     if let Some(validator_uri) = config.validator.as_ref() {
-        validator_backed_full_service(validator_uri, &config, wallet_db, rocket_config, logger);
+        validator_backed_full_service(validator_uri, &config, wallet_db, rocket_config, logger)
     } else {
-        consensus_backed_full_service(&config, wallet_db, rocket_config, logger);
+        consensus_backed_full_service(&config, wallet_db, rocket_config, logger)
     };
 }
 
@@ -183,12 +184,11 @@ fn consensus_backed_full_service(
         config.offline,
         logger,
     );
-
-    // Start HTTP API server
     let state = WalletState { service };
 
     let rocket = consensus_backed_rocket(rocket_config, state);
-    rocket.launch();
+    let api_key = env::var("MC_API_KEY").unwrap_or_default();
+    rocket.manage(APIKeyState(api_key)).launch();
 }
 
 fn validator_backed_full_service(
@@ -271,10 +271,9 @@ fn validator_backed_full_service(
         false,
         logger,
     );
-
-    // Start HTTP API server
     let state = WalletState { service };
 
     let rocket = validator_backed_rocket(rocket_config, state);
-    rocket.launch();
+    let api_key = env::var("MC_API_KEY").unwrap_or_default();
+    rocket.manage(APIKeyState(api_key)).launch();
 }

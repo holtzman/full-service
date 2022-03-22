@@ -3,13 +3,19 @@
 use crate::{
     db::{
         account::{AccountID, AccountModel},
-        models::{Account, TransactionLog, Txo, TXO_USED_AS_CHANGE, TXO_USED_AS_OUTPUT},
+        models::{
+            Account, TransactionLog, Txo, ViewOnlyAccount, TXO_USED_AS_CHANGE, TXO_USED_AS_OUTPUT,
+        },
         transaction_log::TransactionLogModel,
         txo::TxoModel,
+        view_only_account::ViewOnlyAccountModel,
         WalletDb, WalletDbError,
     },
     error::SyncError,
-    service::{sync::sync_account, transaction_builder::WalletTransactionBuilder},
+    service::{
+        sync::{sync_account, sync_view_only_account},
+        transaction_builder::WalletTransactionBuilder,
+    },
     WalletService,
 };
 use diesel::{
@@ -50,10 +56,10 @@ use tempdir::TempDir;
 
 embed_migrations!("migrations/");
 
-pub const MOB: i64 = 1_000_000_000_000;
+pub const MOB: u64 = 1_000_000_000_000;
 
 /// The amount each recipient gets in the test ledger.
-pub const DEFAULT_PER_RECIPIENT_AMOUNT: u64 = 5_000 * MOB as u64;
+pub const DEFAULT_PER_RECIPIENT_AMOUNT: u64 = 5_000 * MOB;
 
 pub struct WalletDbTestContext {
     base_url: String,
@@ -331,29 +337,42 @@ pub fn manually_sync_account(
         match sync_account(&ledger_db, &wallet_db, &account_id.to_string(), &logger) {
             Ok(_) => {}
             Err(SyncError::Database(WalletDbError::Diesel(
-                diesel::result::Error::DatabaseError(kind, info),
-            ))) => {
-                match info.message() {
-                    "database is locked" => log::trace!(logger, "Database locked. Will retry"),
-                    _ => {
-                        log::error!(
-                            logger,
-                            "Unexpected database error {:?} {:?} {:?} {:?} {:?} {:?}",
-                            kind,
-                            info,
-                            info.details(),
-                            info.column_name(),
-                            info.table_name(),
-                            info.hint(),
-                        );
-                        panic!("Could not manually sync account.");
-                    }
-                };
+                diesel::result::Error::DatabaseError(_kind, info),
+            ))) if info.message() == "database is locked" => {
+                log::trace!(logger, "Database locked. Will retry");
                 std::thread::sleep(Duration::from_millis(500));
             }
             Err(e) => panic!("Could not sync account due to {:?}", e),
         }
         account = Account::get(&account_id, &wallet_db.get_conn().unwrap()).unwrap();
+        if account.next_block_index as u64 >= ledger_db.num_blocks().unwrap() {
+            break;
+        }
+    }
+    account
+}
+
+// Sync view-only-account to most recent block
+pub fn manually_sync_view_only_account(
+    ledger_db: &LedgerDB,
+    wallet_db: &WalletDb,
+    view_only_account_id: &str,
+    logger: &Logger,
+) -> ViewOnlyAccount {
+    let mut account: ViewOnlyAccount;
+    loop {
+        match sync_view_only_account(&ledger_db, &wallet_db, &view_only_account_id, &logger) {
+            Ok(_) => {}
+            Err(SyncError::Database(WalletDbError::Diesel(
+                diesel::result::Error::DatabaseError(_kind, info),
+            ))) if info.message() == "database is locked" => {
+                log::trace!(logger, "Database locked. Will retry");
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            Err(e) => panic!("Could not sync account due to {:?}", e),
+        }
+        account =
+            ViewOnlyAccount::get(&view_only_account_id, &wallet_db.get_conn().unwrap()).unwrap();
         if account.next_block_index as u64 >= ledger_db.num_blocks().unwrap() {
             break;
         }
@@ -453,10 +472,10 @@ pub fn create_test_received_txo(
 
     let txo_id_hex = Txo::create_received(
         txo.clone(),
-        Some(recipient_subaddress_index as i64),
+        Some(recipient_subaddress_index),
         Some(key_image),
         value,
-        received_block_index as i64,
+        received_block_index,
         &AccountID::from(account_key).to_string(),
         &wallet_db.get_conn().unwrap(),
     )
@@ -474,7 +493,7 @@ pub fn create_test_minted_and_change_txos(
     wallet_db: WalletDb,
     ledger_db: LedgerDB,
     logger: Logger,
-) -> ((String, i64), (String, i64)) {
+) -> ((String, u64), (String, u64)) {
     let mut rng: StdRng = SeedableRng::from_seed([20u8; 32]);
 
     // Use the builder to create valid TxOuts for this account
@@ -524,8 +543,8 @@ pub fn create_test_minted_and_change_txos(
     // Change starts as an output, and is updated to change when scanned.
     assert_eq!(processed_change.txo_type, TXO_USED_AS_CHANGE);
     (
-        (processed_output.txo_id_hex, processed_output.value),
-        (processed_change.txo_id_hex, processed_change.value),
+        (processed_output.txo_id_hex, processed_output.value as u64),
+        (processed_change.txo_id_hex, processed_change.value as u64),
     )
 }
 
@@ -546,9 +565,9 @@ pub fn random_account_with_seed_values(
             None,
             None,
             &format!("SeedAccount{}", rng.next_u32()),
-            None,
-            None,
-            None,
+            "".to_string(),
+            "".to_string(),
+            "".to_string(),
             &wallet_db.get_conn().unwrap(),
         )
         .unwrap();

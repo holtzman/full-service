@@ -8,7 +8,7 @@ use crate::{
     json_rpc::{
         account_secrets::AccountSecrets,
         address::Address,
-        balance::Balance,
+        balance::{Balance, ViewOnlyBalance},
         block::{Block, BlockContents},
         confirmation_number::Confirmation,
         gift_code::GiftCode,
@@ -21,6 +21,7 @@ use crate::{
         receiver_receipt::ReceiverReceipt,
         tx_proposal::TxProposal,
         txo::Txo,
+        view_only_txo::ViewOnlyTxo,
         wallet_status::WalletStatus,
     },
     service,
@@ -36,11 +37,16 @@ use crate::{
         transaction::TransactionService,
         transaction_log::TransactionLogService,
         txo::TxoService,
+        view_only_account::ViewOnlyAccountService,
+        view_only_txo::ViewOnlyTxoService,
         WalletService,
     },
-    util::b58::{
-        b58_decode_payment_request, b58_encode_public_address, b58_printable_wrapper_type,
-        PrintableWrapperType,
+    util::{
+        b58::{
+            b58_decode_payment_request, b58_encode_public_address, b58_printable_wrapper_type,
+            PrintableWrapperType,
+        },
+        encoding_helpers::hex_to_ristretto,
     },
 };
 use mc_common::logger::global_log;
@@ -50,7 +56,9 @@ use mc_connection::{
 use mc_fog_report_validation::{FogPubkeyResolver, FogResolver};
 use mc_mobilecoind_json::data_types::{JsonTx, JsonTxOut};
 use mc_validator_connection::ValidatorConnection;
-use rocket::{get, post, routes};
+use rocket::{
+    self, get, http::Status, outcome::Outcome, post, request::FromRequest, routes, Request, State,
+};
 use rocket_contrib::json::Json;
 use serde_json::Map;
 use std::{collections::HashMap, convert::TryFrom, iter::FromIterator};
@@ -64,7 +72,40 @@ pub struct WalletState<
     pub service: WalletService<T, FPR>,
 }
 
+pub const API_KEY_HEADER: &str = "X-API-KEY";
+
+pub struct APIKeyState(pub String);
+
+/// Ensures check for a pre-shared symmetric API key for the JsonRPC loop on the
+/// Mobilecoin wallet.
+pub struct ApiKeyGuard {}
+
+#[derive(Debug)]
+pub enum ApiKeyError {
+    Invalid,
+}
+
+impl<'a, 'r> FromRequest<'a, 'r> for ApiKeyGuard {
+    type Error = ApiKeyError;
+
+    fn from_request(
+        req: &'a Request<'r>,
+    ) -> Outcome<Self, (rocket::http::Status, Self::Error), ()> {
+        let client_key = req.headers().get_one(API_KEY_HEADER).unwrap_or_default();
+        let local_key = &req
+            .guard::<State<APIKeyState>>()
+            .expect("api key state config is bad. see main.rs")
+            .0;
+        if local_key == client_key {
+            Outcome::Success(ApiKeyGuard {})
+        } else {
+            Outcome::Failure((Status::Unauthorized, ApiKeyError::Invalid))
+        }
+    }
+}
+
 fn generic_wallet_api<T, FPR>(
+    _api_key_guard: ApiKeyGuard,
     state: rocket::State<WalletState<T, FPR>>,
     command: Json<JsonRPCRequest>,
 ) -> Result<Json<JsonRPCResponse>, String>
@@ -105,18 +146,20 @@ where
 /// The route for the Full Service Wallet API.
 #[post("/wallet", format = "json", data = "<command>")]
 pub fn consensus_backed_wallet_api(
+    _api_key_guard: ApiKeyGuard,
     state: rocket::State<WalletState<ThickClient<HardcodedCredentialsProvider>, FogResolver>>,
     command: Json<JsonRPCRequest>,
 ) -> Result<Json<JsonRPCResponse>, String> {
-    generic_wallet_api(state, command)
+    generic_wallet_api(_api_key_guard, state, command)
 }
 
 #[post("/wallet", format = "json", data = "<command>")]
 pub fn validator_backed_wallet_api(
+    _api_key_guard: ApiKeyGuard,
     state: rocket::State<WalletState<ValidatorConnection, FogResolver>>,
     command: Json<JsonRPCRequest>,
 ) -> Result<Json<JsonRPCResponse>, String> {
-    generic_wallet_api(state, command)
+    generic_wallet_api(_api_key_guard, state, command)
 }
 
 /// The Wallet API inner method, which handles switching on the method enum.
@@ -343,7 +386,12 @@ where
             fog_authority_spki,
         } => {
             let account: db::models::Account = service
-                .create_account(name, fog_report_url, fog_report_id, fog_authority_spki)
+                .create_account(
+                    name,
+                    fog_report_url.unwrap_or_default(),
+                    fog_report_id.unwrap_or_default(),
+                    fog_authority_spki.unwrap_or_default(),
+                )
                 .map_err(format_error)?;
 
             JsonCommandResponse::create_account {
@@ -386,6 +434,17 @@ where
                 account_secrets: AccountSecrets::try_from(&account).map_err(format_error)?,
             }
         }
+        JsonCommandRequest::export_view_only_account_secrets { account_id } => {
+            let account = service
+                .get_view_only_account(&account_id)
+                .map_err(format_error)?;
+            JsonCommandResponse::export_view_only_account_secrets {
+                view_only_account_secrets:
+                    json_rpc::view_only_account::ViewOnlyAccountSecrets::try_from(&account)
+                        .map_err(format_error)?,
+            }
+        }
+
         JsonCommandRequest::get_account { account_id } => JsonCommandResponse::get_account {
             account: json_rpc::account::Account::try_from(
                 &service
@@ -615,6 +674,26 @@ where
                 txo_map,
             }
         }
+        JsonCommandRequest::get_all_view_only_accounts => {
+            let accounts = service.list_view_only_accounts().map_err(format_error)?;
+            let json_accounts: Vec<(String, serde_json::Value)> = accounts
+                .iter()
+                .map(|a| {
+                    json_rpc::view_only_account::ViewOnlyAccount::try_from(a)
+                        .map_err(format_error)
+                        .and_then(|v| {
+                            serde_json::to_value(v)
+                                .map(|v| (a.account_id_hex.clone(), v))
+                                .map_err(format_error)
+                        })
+                })
+                .collect::<Result<Vec<(String, serde_json::Value)>, JsonRPCError>>()?;
+            let account_map: Map<String, serde_json::Value> = Map::from_iter(json_accounts);
+            JsonCommandResponse::get_all_view_only_accounts {
+                account_ids: accounts.iter().map(|a| a.account_id_hex.clone()).collect(),
+                account_map,
+            }
+        }
         JsonCommandRequest::get_balance_for_account { account_id } => {
             JsonCommandResponse::get_balance_for_account {
                 balance: Balance::from(
@@ -629,6 +708,15 @@ where
                 balance: Balance::from(
                     &service
                         .get_balance_for_address(&address)
+                        .map_err(format_error)?,
+                ),
+            }
+        }
+        JsonCommandRequest::get_balance_for_view_only_account { account_id } => {
+            JsonCommandResponse::get_balance_for_view_only_account {
+                balance: ViewOnlyBalance::from(
+                    &service
+                        .get_balance_for_view_only_account(&account_id)
                         .map_err(format_error)?,
                 ),
             }
@@ -738,8 +826,10 @@ where
             offset,
             limit,
         } => {
-            let o = offset.parse::<i64>().map_err(format_error)?;
-            let l = limit.parse::<i64>().map_err(format_error)?;
+            let o = offset
+                .parse::<u64>()
+                .map_err(format_invalid_request_error)?;
+            let l = limit.parse::<u64>().map_err(format_invalid_request_error)?;
 
             if l > 1000 {
                 return Err(format_error("limit must not exceed 1000"));
@@ -764,12 +854,56 @@ where
                 txo_map,
             }
         }
+        JsonCommandRequest::get_txos_for_view_only_account {
+            account_id,
+            offset,
+            limit,
+        } => {
+            let o = offset
+                .parse::<i64>()
+                .map_err(format_invalid_request_error)?;
+            let l = limit.parse::<i64>().map_err(format_invalid_request_error)?;
+
+            if l > 1000 {
+                return Err(format_error("limit must not exceed 1000"));
+            }
+
+            let txos = service
+                .list_view_only_txos(&account_id, Some(o), Some(l))
+                .map_err(format_error)?;
+            let txo_map: Map<String, serde_json::Value> = Map::from_iter(
+                txos.iter()
+                    .map(|t| {
+                        (
+                            t.txo_id_hex.clone(),
+                            serde_json::to_value(ViewOnlyTxo::from(t))
+                                .expect("Could not get json value"),
+                        )
+                    })
+                    .collect::<Vec<(String, serde_json::Value)>>(),
+            );
+
+            JsonCommandResponse::get_txos_for_account {
+                txo_ids: txos.iter().map(|t| t.txo_id_hex.clone()).collect(),
+                txo_map,
+            }
+        }
         JsonCommandRequest::get_wallet_status => JsonCommandResponse::get_wallet_status {
             wallet_status: WalletStatus::try_from(
                 &service.get_wallet_status().map_err(format_error)?,
             )
             .map_err(format_error)?,
         },
+        JsonCommandRequest::get_view_only_account { account_id } => {
+            JsonCommandResponse::get_view_only_account {
+                view_only_account: json_rpc::view_only_account::ViewOnlyAccount::try_from(
+                    &service
+                        .get_view_only_account(&account_id)
+                        .map_err(format_error)?,
+                )
+                .map_err(format_error)?,
+            }
+        }
         JsonCommandRequest::import_account {
             mnemonic,
             key_derivation_version,
@@ -799,9 +933,9 @@ where
                             name,
                             fb,
                             ns,
-                            fog_report_url,
-                            fog_report_id,
-                            fog_authority_spki,
+                            fog_report_url.unwrap_or_default(),
+                            fog_report_id.unwrap_or_default(),
+                            fog_authority_spki.unwrap_or_default(),
                         )
                         .map_err(format_error)?,
                 )
@@ -834,10 +968,33 @@ where
                             name,
                             fb,
                             ns,
-                            fog_report_url,
-                            fog_report_id,
-                            fog_authority_spki,
+                            fog_report_url.unwrap_or_default(),
+                            fog_report_id.unwrap_or_default(),
+                            fog_authority_spki.unwrap_or_default(),
                         )
+                        .map_err(format_error)?,
+                )
+                .map_err(format_error)?,
+            }
+        }
+        JsonCommandRequest::import_view_only_account {
+            view_private_key,
+            name,
+            first_block_index,
+        } => {
+            let fb = first_block_index
+                .map(|fb| fb.parse::<i64>())
+                .transpose()
+                .map_err(format_error)?;
+
+            let n = name.unwrap_or_default();
+
+            let decoded_key = hex_to_ristretto(&view_private_key).map_err(format_error)?;
+
+            JsonCommandResponse::import_view_only_account {
+                view_only_account: json_rpc::view_only_account::ViewOnlyAccount::try_from(
+                    &service
+                        .import_view_only_account(decoded_key, &n, fb)
                         .map_err(format_error)?,
                 )
                 .map_err(format_error)?,
@@ -852,6 +1009,13 @@ where
             JsonCommandResponse::remove_gift_code {
                 removed: service
                     .remove_gift_code(&EncodedGiftCode(gift_code_b58))
+                    .map_err(format_error)?,
+            }
+        }
+        JsonCommandRequest::remove_view_only_account { account_id } => {
+            JsonCommandResponse::remove_view_only_account {
+                removed: service
+                    .remove_view_only_account(&account_id)
                     .map_err(format_error)?,
             }
         }
@@ -905,6 +1069,16 @@ where
                 .map_err(format_error)?,
             }
         }
+        JsonCommandRequest::update_view_only_account_name { account_id, name } => {
+            JsonCommandResponse::update_view_only_account_name {
+                view_only_account: json_rpc::view_only_account::ViewOnlyAccount::try_from(
+                    &service
+                        .update_view_only_account_name(&account_id, &name)
+                        .map_err(format_error)?,
+                )
+                .map_err(format_error)?,
+            }
+        }
         JsonCommandRequest::validate_confirmation {
             account_id,
             txo_id,
@@ -917,6 +1091,16 @@ where
         }
         JsonCommandRequest::verify_address { address } => JsonCommandResponse::verify_address {
             verified: service.verify_address(&address).map_err(format_error)?,
+        },
+        JsonCommandRequest::version => JsonCommandResponse::version {
+            string: env!("CARGO_PKG_VERSION").to_string(),
+            number: (
+                env!("CARGO_PKG_VERSION_MAJOR").to_string(),
+                env!("CARGO_PKG_VERSION_MINOR").to_string(),
+                env!("CARGO_PKG_VERSION_PATCH").to_string(),
+                env!("CARGO_PKG_VERSION_PRE").to_string(),
+            ),
+            commit: env!("VERGEN_GIT_SHA").to_string(),
         },
     };
 

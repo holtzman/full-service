@@ -2,6 +2,11 @@
 
 A MobileCoin service for wallet implementations.
 
+The Full-Service Node provides ledger syncing and validation, account management, and funds transfer and receiving. It uses a JSONRPC API, so you can connect to it from command line tools or build services around its functionality. It serves the use cases of single user (and is the backing to the MobileCoin Desktop Wallet), while also serving high performance, multi-account, multi-subaddress needs (such as backing merchant services platforms).
+
+Please see the full API documentation at: [High-Performance Wallet API](https://mobilecoin.gitbook.io/full-service-api/)
+
+
 * You must read and accept the [Terms of Use for MobileCoins and MobileCoin Wallets](./TERMS-OF-USE.md) to use
   MobileCoin Software.
 
@@ -31,8 +36,6 @@ information.
 
 For documentation, usage, and API specification, see our gitbook
 page: [https://mobilecoin.gitbook.io/full-service-api/](https://mobilecoin.gitbook.io/full-service-api/)
-
-Deprecated docs are being phased out, but remain at [API.md](API.md) (possibly increasingly out of date)
 
 For database encryption features, see [DATABASE.md](DATABASE.md).
 
@@ -227,6 +230,9 @@ sudo xcode-select -s /Applications/<name of xcode application>.app/Contents/Deve
 | `offline` | Use Full Service in offline mode. This mode does not download new blocks or submit transactions. | |
 | `fog-ingest-enclave-css` | Path to the Fog ingest enclave sigstruct CSS file. | Needed in order to enable sending transactions to fog addresses. |
 
+## API Key
+
+You can add an optional API key to full service by adding a `.env` file to the root of this repo. The variable you need to set is: `MC_API_KEY="<api key of your choosing>"`. If you set this env var, you must provide the `X-API-KEY` header in your requests to full-service.
 
 ## Exit Codes
 

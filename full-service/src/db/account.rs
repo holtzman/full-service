@@ -2,17 +2,20 @@
 
 //! DB impl for the Account model.
 
-use crate::db::{
-    assigned_subaddress::AssignedSubaddressModel,
-    models::{Account, AssignedSubaddress, NewAccount, TransactionLog, Txo},
-    transaction_log::TransactionLogModel,
-    txo::TxoModel,
-    WalletDbError,
+use crate::{
+    db::{
+        assigned_subaddress::AssignedSubaddressModel,
+        models::{Account, AssignedSubaddress, NewAccount, TransactionLog, Txo},
+        transaction_log::TransactionLogModel,
+        txo::TxoModel,
+        WalletDbError,
+    },
+    util::constants::{
+        DEFAULT_CHANGE_SUBADDRESS_INDEX, DEFAULT_FIRST_BLOCK_INDEX, DEFAULT_NEXT_SUBADDRESS_INDEX,
+        DEFAULT_SUBADDRESS_INDEX, MNEMONIC_KEY_DERIVATION_VERSION,
+        ROOT_ENTROPY_KEY_DERIVATION_VERSION,
+    },
 };
-
-use mc_account_keys::{AccountKey, RootEntropy, RootIdentity, DEFAULT_SUBADDRESS_INDEX};
-use mc_account_keys_slip10::Slip10Key;
-use mc_crypto_digestible::{Digestible, MerlinTranscript};
 
 use bip39::Mnemonic;
 use diesel::{
@@ -20,14 +23,10 @@ use diesel::{
     r2d2::{ConnectionManager, PooledConnection},
     RunQueryDsl,
 };
+use mc_account_keys::{AccountKey, RootEntropy, RootIdentity};
+use mc_account_keys_slip10::Slip10Key;
+use mc_crypto_digestible::{Digestible, MerlinTranscript};
 use std::fmt;
-
-pub const DEFAULT_CHANGE_SUBADDRESS_INDEX: u64 = 1;
-pub const DEFAULT_NEXT_SUBADDRESS_INDEX: u64 = 2;
-pub const DEFAULT_FIRST_BLOCK_INDEX: u64 = 0;
-
-pub const ROOT_ENTROPY_KEY_DERIVATION_VERSION: u8 = 1;
-pub const MNEMONIC_KEY_DERIVATION_VERSION: u8 = 2;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct AccountID(pub String);
@@ -58,9 +57,9 @@ pub trait AccountModel {
         import_block_index: Option<u64>,
         next_subaddress_index: Option<u64>,
         name: &str,
-        fog_report_url: Option<String>,
-        fog_report_id: Option<String>,
-        fog_authority_spki: Option<String>,
+        fog_report_url: String,
+        fog_report_id: String,
+        fog_authority_spki: String,
         conn: &PooledConnection<ConnectionManager<SqliteConnection>>,
     ) -> Result<(AccountID, String), WalletDbError>;
 
@@ -75,9 +74,9 @@ pub trait AccountModel {
         import_block_index: Option<u64>,
         next_subaddress_index: Option<u64>,
         name: &str,
-        fog_report_url: Option<String>,
-        fog_report_id: Option<String>,
-        fog_authority_spki: Option<String>,
+        fog_report_url: String,
+        fog_report_id: String,
+        fog_authority_spki: String,
         conn: &PooledConnection<ConnectionManager<SqliteConnection>>,
     ) -> Result<(AccountID, String), WalletDbError>;
 
@@ -106,9 +105,9 @@ pub trait AccountModel {
         import_block_index: u64,
         first_block_index: Option<u64>,
         next_subaddress_index: Option<u64>,
-        fog_report_url: Option<String>,
-        fog_report_id: Option<String>,
-        fog_authority_spki: Option<String>,
+        fog_report_url: String,
+        fog_report_id: String,
+        fog_authority_spki: String,
         conn: &PooledConnection<ConnectionManager<SqliteConnection>>,
     ) -> Result<Account, WalletDbError>;
 
@@ -120,9 +119,9 @@ pub trait AccountModel {
         import_block_index: u64,
         first_block_index: Option<u64>,
         next_subaddress_index: Option<u64>,
-        fog_report_url: Option<String>,
-        fog_report_id: Option<String>,
-        fog_authority_spki: Option<String>,
+        fog_report_url: String,
+        fog_report_id: String,
+        fog_authority_spki: String,
         conn: &PooledConnection<ConnectionManager<SqliteConnection>>,
     ) -> Result<Account, WalletDbError>;
 
@@ -161,7 +160,7 @@ pub trait AccountModel {
     /// Update the next block index this account will need to sync.
     fn update_next_block_index(
         &self,
-        next_block_index: i64,
+        next_block_index: u64,
         conn: &PooledConnection<ConnectionManager<SqliteConnection>>,
     ) -> Result<(), WalletDbError>;
 
@@ -179,17 +178,17 @@ impl AccountModel for Account {
         import_block_index: Option<u64>,
         next_subaddress_index: Option<u64>,
         name: &str,
-        fog_report_url: Option<String>,
-        fog_report_id: Option<String>,
-        fog_authority_spki: Option<String>,
+        fog_report_url: String,
+        fog_report_id: String,
+        fog_authority_spki: String,
         conn: &PooledConnection<ConnectionManager<SqliteConnection>>,
     ) -> Result<(AccountID, String), WalletDbError> {
-        let fog_enabled = fog_report_url.is_some();
+        let fog_enabled = !fog_report_url.is_empty();
 
         let account_key = Slip10Key::from(mnemonic.clone()).try_into_account_key(
-            &fog_report_url.unwrap_or_else(|| "".to_string()),
-            &fog_report_id.unwrap_or_else(|| "".to_string()),
-            &base64::decode(fog_authority_spki.unwrap_or_else(|| "".to_string()))?,
+            &fog_report_url,
+            &fog_report_id,
+            &base64::decode(fog_authority_spki)?,
         )?;
 
         Account::create(
@@ -211,21 +210,18 @@ impl AccountModel for Account {
         import_block_index: Option<u64>,
         next_subaddress_index: Option<u64>,
         name: &str,
-        fog_report_url: Option<String>,
-        fog_report_id: Option<String>,
-        fog_authority_spki: Option<String>,
+        fog_report_url: String,
+        fog_report_id: String,
+        fog_authority_spki: String,
         conn: &PooledConnection<ConnectionManager<SqliteConnection>>,
     ) -> Result<(AccountID, String), WalletDbError> {
-        let fog_enabled = fog_report_url.is_some();
+        let fog_enabled = !fog_report_url.is_empty();
 
         let root_id = RootIdentity {
             root_entropy: entropy.clone(),
-            fog_report_url: fog_report_url.unwrap_or_else(|| "".to_string()),
-            fog_report_id: fog_report_id.unwrap_or_else(|| "".to_string()),
-            fog_authority_spki: base64::decode(
-                fog_authority_spki.unwrap_or_else(|| "".to_string()),
-            )
-            .expect("invalid spki"),
+            fog_report_url,
+            fog_report_id,
+            fog_authority_spki: base64::decode(fog_authority_spki).expect("invalid spki"),
         };
         let account_key = AccountKey::from(&root_id);
 
@@ -322,9 +318,9 @@ impl AccountModel for Account {
         import_block_index: u64,
         first_block_index: Option<u64>,
         next_subaddress_index: Option<u64>,
-        fog_report_url: Option<String>,
-        fog_report_id: Option<String>,
-        fog_authority_spki: Option<String>,
+        fog_report_url: String,
+        fog_report_id: String,
+        fog_authority_spki: String,
         conn: &PooledConnection<ConnectionManager<SqliteConnection>>,
     ) -> Result<Account, WalletDbError> {
         let (account_id, _public_address_b58) = Account::create_from_mnemonic(
@@ -347,9 +343,9 @@ impl AccountModel for Account {
         import_block_index: u64,
         first_block_index: Option<u64>,
         next_subaddress_index: Option<u64>,
-        fog_report_url: Option<String>,
-        fog_report_id: Option<String>,
-        fog_authority_spki: Option<String>,
+        fog_report_url: String,
+        fog_report_id: String,
+        fog_authority_spki: String,
         conn: &PooledConnection<ConnectionManager<SqliteConnection>>,
     ) -> Result<Account, WalletDbError> {
         let (account_id, _public_address_b58) = Account::create_from_root_entropy(
@@ -431,12 +427,12 @@ impl AccountModel for Account {
 
     fn update_next_block_index(
         &self,
-        next_block_index: i64,
+        next_block_index: u64,
         conn: &PooledConnection<ConnectionManager<SqliteConnection>>,
     ) -> Result<(), WalletDbError> {
         use crate::db::schema::accounts::dsl::{account_id_hex, accounts};
         diesel::update(accounts.filter(account_id_hex.eq(&self.account_id_hex)))
-            .set(crate::db::schema::accounts::next_block_index.eq(next_block_index))
+            .set(crate::db::schema::accounts::next_block_index.eq(next_block_index as i64))
             .execute(conn)?;
         Ok(())
     }
@@ -492,9 +488,9 @@ mod tests {
                 None,
                 None,
                 "Alice's Main Account",
-                None,
-                None,
-                None,
+                "".to_string(),
+                "".to_string(),
+                "".to_string(),
                 &conn,
             )
             .unwrap();
@@ -560,9 +556,9 @@ mod tests {
                 Some(50),
                 None,
                 "",
-                None,
-                None,
-                None,
+                "".to_string(),
+                "".to_string(),
+                "".to_string(),
                 &wallet_db.get_conn().unwrap(),
             )
             .unwrap();
@@ -638,9 +634,9 @@ mod tests {
                 None,
                 None,
                 "Alice's Main Account",
-                None,
-                None,
-                None,
+                "".to_string(),
+                "".to_string(),
+                "".to_string(),
                 &conn,
             )
             .unwrap();
@@ -669,9 +665,9 @@ mod tests {
                 None,
                 None,
                 "Alice's FOG Account",
-                Some("fog//some.fog.url".to_string()),
-                Some("".to_string()),
-                Some("DefinitelyARealFOGAuthoritySPKI".to_string()),
+                "fog//some.fog.url".to_string(),
+                "".to_string(),
+                "DefinitelyARealFOGAuthoritySPKI".to_string(),
                 &conn,
             )
             .unwrap();
