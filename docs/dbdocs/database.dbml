@@ -42,24 +42,24 @@ Table gift_codes {
 
 Table transaction_logs {
   id integer [pk, not null]
-  transaction_id_hex varchar [not null, unique]
   account_id_hex varchar [not null, ref: > accounts.account_id_hex]
-  assigned_subaddress_b58 varchar [not null]
-  value bigint [not null]
-  fee bigint
-  status varchar(8) [not null]
-  sent_time bigint
   submitted_block_index bigint
+  tombstone_block_index bigint
   finalized_block_index bigint
   comment text [not null]
-  direction varchar(8) [not null]
   tx blob
 }
 
 Table transaction_txo_types {
-  transaction_id_hex varchar [pk, not null, ref: > transaction_logs.transaction_id_hex]
+  transaction_log_id integer [pk, not null, ref: > transaction_logs.id]
   txo_id_hex varchar [pk, not null, ref: > txos.txo_id_hex]
-  transaction_txo_type varchar(6) [not null]
+  type varchar(6) [not null]
+}
+
+Table transaction_fees {
+  transaction_log_id integer [pk, not null, ref: > transaction_logs.id]
+  value bigint [not null]
+  token_id integer [not null]
 }
 
 Table txos {
@@ -74,12 +74,8 @@ Table txos {
   subaddress_index bigint
   key_image blob
   received_block_index bigint
-  pending_tombstone_block_index bigint
-  spent_block_index bigint
-  confirmation blob
-  recipient_public_address_b58 varchar [not null]
-  minted_account_id_hex varchar [ref: > accounts.account_id_hex]
-  received_account_id_hex varchar [ref: > accounts.account_id_hex]
+  shared_secret blob
+  account_id_hex varchar [ref: > accounts.account_id_hex]
 }
 
 Table view_only_accounts {
