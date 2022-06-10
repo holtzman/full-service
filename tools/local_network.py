@@ -21,7 +21,7 @@ BASE_CLIENT_PORT = 3200
 BASE_PEER_PORT = 3300
 BASE_ADMIN_PORT = 3400
 BASE_ADMIN_HTTP_GATEWAY_PORT = 3500
-MOBILECOIND_PORT = 4444
+# MOBILECOIND_PORT = 4444
 
 # TODO make these command line arguments
 IAS_API_KEY = os.getenv('IAS_API_KEY', default='0'*64) # 32 bytes
@@ -418,9 +418,9 @@ class Network:
                     print(f'Node {node} ledger distribution died with exit code {node.ledger_distribution_process.poll()}')
                     return False
 
-            if self.mobilecoind.process and self.mobilecoind.process.poll() is not None:
-                print(f'mobilecoind died with exit code {self.mobilecoind.process.poll()}')
-                return False
+            # if self.mobilecoind.process and self.mobilecoind.process.poll() is not None:
+            #     print(f'mobilecoind died with exit code {self.mobilecoind.process.poll()}')
+            #     return False
 
             time.sleep(1)
 
