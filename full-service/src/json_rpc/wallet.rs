@@ -655,7 +655,7 @@ where
                     .iter()
                     .map(|(t, a)| {
                         (
-                            t.transaction_id_hex.clone(),
+                            t.id.clone(),
                             serde_json::json!(json_rpc::transaction_log::TransactionLog::new(t, a)),
                         )
                     })
@@ -665,7 +665,7 @@ where
             JsonCommandResponse::get_all_transaction_logs_for_block {
                 transaction_log_ids: transaction_logs_and_txos
                     .iter()
-                    .map(|(t, _a)| t.transaction_id_hex.to_string())
+                    .map(|(t, _a)| t.id.to_string())
                     .collect(),
                 transaction_log_map,
             }
@@ -679,7 +679,7 @@ where
                     .iter()
                     .map(|(t, a)| {
                         (
-                            t.transaction_id_hex.clone(),
+                            t.id.clone(),
                             serde_json::json!(json_rpc::transaction_log::TransactionLog::new(t, a)),
                         )
                     })
@@ -858,7 +858,7 @@ where
                     .iter()
                     .map(|(t, a)| {
                         (
-                            t.transaction_id_hex.clone(),
+                            t.id.clone(),
                             serde_json::json!(json_rpc::transaction_log::TransactionLog::new(t, a)),
                         )
                     })
@@ -868,7 +868,7 @@ where
             JsonCommandResponse::get_transaction_logs_for_account {
                 transaction_log_ids: transaction_logs_and_txos
                     .iter()
-                    .map(|(t, _a)| t.transaction_id_hex.to_string())
+                    .map(|(t, _a)| t.id.to_string())
                     .collect(),
                 transaction_log_map,
             }

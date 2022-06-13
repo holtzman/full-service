@@ -128,10 +128,6 @@ impl AssignedSubaddressModel for AssignedSubaddress {
         use crate::db::schema::{
             accounts::dsl::{account_id_hex as dsl_account_id_hex, accounts},
             assigned_subaddresses,
-            transaction_logs::dsl::{
-                account_id_hex as tx_log_account_id_hex,
-                transaction_id_hex as tx_log_transaction_id_hex, transaction_logs,
-            },
         };
 
         let account = Account::get(&AccountID(account_id_hex.to_string()), conn)?;

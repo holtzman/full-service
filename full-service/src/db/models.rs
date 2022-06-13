@@ -357,8 +357,7 @@ pub struct NewAssignedSubaddress<'a> {
 #[primary_key(id)]
 #[table_name = "transaction_logs"]
 pub struct TransactionLog {
-    pub id: i32,
-    pub transaction_id_hex: String,
+    pub id: String,
     pub account_id_hex: String,
     pub submitted_block_index: Option<i64>,
     pub tombstone_block_index: Option<i64>,
@@ -371,7 +370,7 @@ pub struct TransactionLog {
 #[derive(Insertable)]
 #[table_name = "transaction_logs"]
 pub struct NewTransactionLog<'a> {
-    pub transaction_id_hex: &'a str,
+    pub id: &'a str,
     pub account_id_hex: &'a str,
     pub submitted_block_index: Option<i64>,
     pub tombstone_block_index: Option<i64>,
@@ -381,12 +380,12 @@ pub struct NewTransactionLog<'a> {
 }
 
 #[derive(Clone, Serialize, Associations, Identifiable, Queryable, PartialEq, Debug)]
-#[belongs_to(TransactionLog, foreign_key = "transaction_id_hex")]
+#[belongs_to(TransactionLog, foreign_key = "transaction_log_id")]
 #[belongs_to(Txo, foreign_key = "txo_id_hex")]
 #[table_name = "transaction_txo_types"]
-#[primary_key(transaction_id_hex, txo_id_hex)]
+#[primary_key(transaction_log_id, txo_id_hex)]
 pub struct TransactionTxoType {
-    pub transaction_id_hex: String,
+    pub transaction_log_id: String,
     pub txo_id_hex: String,
     pub transaction_txo_type: String,
 }
@@ -394,17 +393,17 @@ pub struct TransactionTxoType {
 #[derive(Insertable)]
 #[table_name = "transaction_txo_types"]
 pub struct NewTransactionTxoType<'a> {
-    pub transaction_id_hex: &'a str,
+    pub transaction_log_id: &'a str,
     pub txo_id_hex: &'a str,
     pub transaction_txo_type: &'a str,
 }
 
 #[derive(Clone, Serialize, Associations, Identifiable, Queryable, PartialEq, Debug)]
-#[belongs_to(TransactionLog, foreign_key = "transaction_id_hex")]
+#[belongs_to(TransactionLog, foreign_key = "transaction_log_id")]
 #[table_name = "transaction_fees"]
-#[primary_key(transaction_id_hex)]
+#[primary_key(transaction_log_id)]
 pub struct TransactionFee {
-    pub transaction_id_hex: String,
+    pub transaction_log_id: String,
     pub value: i64,
     pub token_id: i64,
 }
@@ -412,7 +411,7 @@ pub struct TransactionFee {
 #[derive(Insertable)]
 #[table_name = "transaction_fees"]
 pub struct NewTransactionFee<'a> {
-    pub transaction_id_hex: &'a str,
+    pub transaction_log_id: &'a str,
     pub value: i64,
     pub token_id: i64,
 }

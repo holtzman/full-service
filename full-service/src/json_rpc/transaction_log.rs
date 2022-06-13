@@ -89,7 +89,7 @@ impl TransactionLog {
     ) -> Self {
         Self {
             object: "transaction_log".to_string(),
-            transaction_log_id: transaction_log.transaction_id_hex.clone(),
+            transaction_log_id: transaction_log.id.clone(),
             direction: "".to_string(),
             is_sent_recovered: None, // FIXME: WS-16 "Is Sent Recovered"
             account_id: transaction_log.account_id_hex.clone(),

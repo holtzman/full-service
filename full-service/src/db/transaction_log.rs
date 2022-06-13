@@ -47,7 +47,7 @@ pub struct AssociatedTxos {
 
 pub trait TransactionLogModel {
     /// Get a transaction log from the TransactionId.
-    fn get(transaction_id_hex: &str, conn: &Conn) -> Result<TransactionLog, WalletDbError>;
+    fn get(id: &str, conn: &Conn) -> Result<TransactionLog, WalletDbError>;
 
     /// Get all transaction logs for the given block index.
     fn get_all_for_block_index(
@@ -115,20 +115,18 @@ pub trait TransactionLogModel {
 }
 
 impl TransactionLogModel for TransactionLog {
-    fn get(transaction_id_hex: &str, conn: &Conn) -> Result<TransactionLog, WalletDbError> {
-        use crate::db::schema::transaction_logs::dsl::{
-            transaction_id_hex as dsl_transaction_id_hex, transaction_logs,
-        };
+    fn get(id: &str, conn: &Conn) -> Result<TransactionLog, WalletDbError> {
+        use crate::db::schema::transaction_logs;
 
-        match transaction_logs
-            .filter(dsl_transaction_id_hex.eq(transaction_id_hex))
+        match transaction_logs::table
+            .filter(transaction_logs::id.eq(id))
             .get_result::<TransactionLog>(conn)
         {
             Ok(a) => Ok(a),
             // Match on NotFound to get a more informative NotFound Error
-            Err(diesel::result::Error::NotFound) => Err(WalletDbError::TransactionLogNotFound(
-                transaction_id_hex.to_string(),
-            )),
+            Err(diesel::result::Error::NotFound) => {
+                Err(WalletDbError::TransactionLogNotFound(id.to_string()))
+            }
             Err(e) => Err(e.into()),
         }
     }
@@ -169,7 +167,7 @@ impl TransactionLogModel for TransactionLog {
         // https://docs.diesel.rs/diesel/associations/trait.GroupedBy.html
         let transaction_txos: Vec<(TransactionTxoType, Txo)> = transaction_txo_types::table
             .inner_join(txos::table.on(transaction_txo_types::txo_id_hex.eq(txos::txo_id_hex)))
-            .filter(transaction_txo_types::transaction_id_hex.eq(&self.transaction_id_hex))
+            .filter(transaction_txo_types::transaction_log_id.eq(&self.id))
             .select((transaction_txo_types::all_columns, txos::all_columns))
             .load(conn)?;
 
@@ -201,9 +199,10 @@ impl TransactionLogModel for TransactionLog {
         use crate::db::schema::{transaction_logs, transaction_txo_types};
 
         Ok(transaction_logs::table
-            .inner_join(transaction_txo_types::table.on(
-                transaction_logs::transaction_id_hex.eq(transaction_txo_types::transaction_id_hex),
-            ))
+            .inner_join(
+                transaction_txo_types::table
+                    .on(transaction_logs::id.eq(transaction_txo_types::transaction_log_id)),
+            )
             .filter(transaction_txo_types::txo_id_hex.eq(txo_id_hex))
             .select(transaction_logs::all_columns)
             .load(conn)?)
@@ -226,9 +225,10 @@ impl TransactionLogModel for TransactionLog {
         let mut transactions_query = transaction_logs::table
             .into_boxed()
             .filter(transaction_logs::account_id_hex.eq(account_id_hex))
-            .inner_join(transaction_txo_types::table.on(
-                transaction_logs::transaction_id_hex.eq(transaction_txo_types::transaction_id_hex),
-            ))
+            .inner_join(
+                transaction_txo_types::table
+                    .on(transaction_logs::id.eq(transaction_txo_types::transaction_log_id)),
+            )
             .inner_join(txos::table.on(transaction_txo_types::txo_id_hex.eq(txos::txo_id_hex)))
             .select((
                 transaction_logs::all_columns,
@@ -263,9 +263,9 @@ impl TransactionLogModel for TransactionLog {
         }
         let mut results: HashMap<String, TransactionContents> = HashMap::default();
         for (transaction, transaction_txo_type, txo) in transactions {
-            if results.get(&transaction.transaction_id_hex).is_none() {
+            if results.get(&transaction.id).is_none() {
                 results.insert(
-                    transaction.transaction_id_hex.clone(),
+                    transaction.id.clone(),
                     TransactionContents {
                         transaction_log: transaction.clone(),
                         inputs: Vec::new(),
@@ -275,7 +275,7 @@ impl TransactionLogModel for TransactionLog {
                 );
             };
 
-            let entry = results.get_mut(&transaction.transaction_id_hex).unwrap();
+            let entry = results.get_mut(&transaction.id).unwrap();
 
             if entry.transaction_log != transaction {
                 return Err(WalletDbError::TransactionMismatch);
@@ -293,7 +293,7 @@ impl TransactionLogModel for TransactionLog {
             }
         }
 
-        let mut results: Vec<(TransactionLog, AssociatedTxos)> = results
+        let results: Vec<(TransactionLog, AssociatedTxos)> = results
             .values()
             .cloned()
             .map(|t| {
@@ -308,7 +308,6 @@ impl TransactionLogModel for TransactionLog {
             })
             .collect();
 
-        results.sort_by_key(|r| r.0.id);
         Ok(results)
     }
 
@@ -366,7 +365,7 @@ impl TransactionLogModel for TransactionLog {
 
         // Create a TransactionLogs entry
         let new_transaction_log = NewTransactionLog {
-            transaction_id_hex: &transaction_id.to_string(),
+            id: &transaction_id.to_string(),
             account_id_hex, // Can be null if submitting an "unowned" proposal.
             submitted_block_index: Some(block_index as i64),
             tombstone_block_index: Some(tx_proposal.tx.prefix.tombstone_block as i64),
@@ -381,7 +380,7 @@ impl TransactionLogModel for TransactionLog {
         // Create an entry per TXO for the TransactionTxoTypes
         for (txo_id_hex, transaction_txo_type) in txo_ids {
             let new_transaction_txo = NewTransactionTxoType {
-                transaction_id_hex: &transaction_id.to_string(),
+                transaction_log_id: &transaction_id.to_string(),
                 txo_id_hex: &txo_id_hex,
                 transaction_txo_type: &transaction_txo_type,
             };
@@ -391,7 +390,7 @@ impl TransactionLogModel for TransactionLog {
         }
 
         let new_transaction_fee = NewTransactionFee {
-            transaction_id_hex: &transaction_id.to_string(),
+            transaction_log_id: &transaction_id.to_string(),
             value: tx_proposal.fee() as i64,
             token_id: *Mob::ID as i64,
         };
@@ -407,14 +406,13 @@ impl TransactionLogModel for TransactionLog {
 
         let results: Vec<String> = transaction_logs
             .filter(cols::account_id_hex.eq(account_id_hex))
-            .select(cols::transaction_id_hex)
+            .select(cols::id)
             .load(conn)?;
 
-        for transaction_id_hex in results.iter() {
-            diesel::delete(
-                transaction_txo_types.filter(types_cols::transaction_id_hex.eq(transaction_id_hex)),
-            )
-            .execute(conn)?;
+        for id in results.iter() {
+            diesel::delete(transaction_txo_types.filter(types_cols::transaction_log_id.eq(id)))
+                .execute(conn)?;
+            // TODO - delete the transaction fees
         }
 
         diesel::delete(transaction_logs.filter(cols::account_id_hex.eq(account_id_hex)))
@@ -570,7 +568,7 @@ mod tests {
                 // There should be one TransactionLog per received txo
                 assert_eq!(transaction_logs.len(), 1);
 
-                assert_eq!(&transaction_logs[0].transaction_id_hex, txo_id_hex);
+                assert_eq!(&transaction_logs[0].id, txo_id_hex);
 
                 let txo_details = Txo::get(txo_id_hex, &wallet_db.get_conn().unwrap()).unwrap();
                 assert_eq!(transaction_logs[0].value, txo_details.value);

@@ -83,8 +83,7 @@ table! {
 
 table! {
     transaction_logs (id) {
-        id -> Integer,
-        transaction_id_hex -> Text,
+        id -> Text,
         account_id_hex -> Text,
         submitted_block_index -> Nullable<BigInt>,
         tombstone_block_index -> Nullable<BigInt>,
@@ -95,16 +94,16 @@ table! {
 }
 
 table! {
-    transaction_txo_types (transaction_id_hex, txo_id_hex) {
-        transaction_id_hex -> Text,
+    transaction_txo_types (transaction_log_id, txo_id_hex) {
+        transaction_log_id -> Text,
         txo_id_hex -> Text,
         transaction_txo_type -> Text,
     }
 }
 
 table! {
-    transaction_fees (transaction_id_hex) {
-        transaction_id_hex -> Text,
+    transaction_fees (transaction_log_id) {
+        transaction_log_id -> Text,
         value -> BigInt,
         token_id -> BigInt,
     }
