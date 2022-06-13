@@ -7,16 +7,15 @@ use diesel::prelude::*;
 use mc_common::HashMap;
 use mc_crypto_digestible::{Digestible, MerlinTranscript};
 use mc_mobilecoind::payments::TxProposal;
-use mc_transaction_core::{tx::Tx, Amount};
+use mc_transaction_core::{tokens::Mob, tx::Tx, Amount, Token};
 use std::fmt;
 
 use crate::db::{
     account::{AccountID, AccountModel},
     models::{
-        Account, NewTransactionLog, NewTransactionTxoType, TransactionLog, TransactionTxoType, Txo,
-        TXO_USED_AS_CHANGE, TXO_USED_AS_INPUT, TXO_USED_AS_OUTPUT, TX_DIRECTION_RECEIVED,
-        TX_DIRECTION_SENT, TX_STATUS_BUILT, TX_STATUS_FAILED, TX_STATUS_PENDING,
-        TX_STATUS_SUCCEEDED,
+        Account, NewTransactionFee, NewTransactionLog, NewTransactionTxoType, TransactionFee,
+        TransactionLog, TransactionTxoType, Txo, TXO_USED_AS_CHANGE, TXO_USED_AS_INPUT,
+        TXO_USED_AS_OUTPUT,
     },
     txo::{TxoID, TxoModel},
     Conn, WalletDbError,
@@ -30,13 +29,6 @@ impl From<&Tx> for TransactionID {
     fn from(src: &Tx) -> TransactionID {
         let temp: [u8; 32] = src.digest32::<MerlinTranscript>(b"transaction_data");
         Self(hex::encode(temp))
-    }
-}
-
-// TransactionID is formed from the received TxoID when received
-impl From<String> for TransactionID {
-    fn from(src: String) -> TransactionID {
-        Self(src)
     }
 }
 
@@ -88,16 +80,6 @@ pub trait TransactionLogModel {
         max_block_index: Option<u64>,
         conn: &Conn,
     ) -> Result<Vec<(TransactionLog, AssociatedTxos)>, WalletDbError>;
-
-    /// Log a received transaction.
-    fn log_received(
-        account_id_hex: &str,
-        assigned_subaddress_b58: Option<&str>,
-        txo_id_hex: &str,
-        amount: Amount,
-        block_index: u64,
-        conn: &Conn,
-    ) -> Result<(), WalletDbError>;
 
     /// Log a submitted transaction.
     ///
@@ -330,49 +312,6 @@ impl TransactionLogModel for TransactionLog {
         Ok(results)
     }
 
-    fn log_received(
-        account_id_hex: &str,
-        assigned_subaddress_b58: Option<&str>,
-        txo_id_hex: &str,
-        amount: Amount,
-        block_index: u64,
-        conn: &Conn,
-    ) -> Result<(), WalletDbError> {
-        use crate::db::schema::transaction_txo_types;
-
-        let new_transaction_log = NewTransactionLog {
-            transaction_id_hex: txo_id_hex,
-            account_id_hex,
-            assigned_subaddress_b58,
-            value: amount.value as i64, // We store numbers between 2^63 and 2^64 as negative.
-            fee: None,                  // Impossible to recover fee from received transaction
-            status: TX_STATUS_SUCCEEDED,
-            sent_time: None, // NULL for received
-            submitted_block_index: None,
-            finalized_block_index: Some(block_index as i64),
-            comment: "", // NULL for received
-            direction: TX_DIRECTION_RECEIVED,
-            tx: None, // NULL for received
-        };
-
-        diesel::insert_into(crate::db::schema::transaction_logs::table)
-            .values(&new_transaction_log)
-            .execute(conn)?;
-
-        // Create an entry per TXO for the TransactionTxoTypes
-        let new_transaction_txo = NewTransactionTxoType {
-            transaction_id_hex: txo_id_hex,
-            txo_id_hex,
-            transaction_txo_type: TXO_USED_AS_OUTPUT,
-        };
-
-        diesel::insert_into(transaction_txo_types::table)
-            .values(&new_transaction_txo)
-            .execute(conn)?;
-
-        Ok(())
-    }
-
     fn log_submitted(
         tx_proposal: TxProposal,
         block_index: u64,
@@ -429,16 +368,11 @@ impl TransactionLogModel for TransactionLog {
         let new_transaction_log = NewTransactionLog {
             transaction_id_hex: &transaction_id.to_string(),
             account_id_hex, // Can be null if submitting an "unowned" proposal.
-            assigned_subaddress_b58: None, // NULL for sent
-            value: transaction_value as i64,
-            fee: Some(tx_proposal.tx.prefix.fee as i64),
-            status: TX_STATUS_PENDING,
-            sent_time: Some(Utc::now().timestamp()),
             submitted_block_index: Some(block_index as i64),
+            tombstone_block_index: Some(tx_proposal.tx.prefix.tombstone_block as i64),
             finalized_block_index: None,
             comment: &comment,
-            direction: TX_DIRECTION_SENT,
-            tx: Some(&tx),
+            tx: &tx,
         };
         diesel::insert_into(crate::db::schema::transaction_logs::table)
             .values(&new_transaction_log)
@@ -455,6 +389,13 @@ impl TransactionLogModel for TransactionLog {
                 .values(&new_transaction_txo)
                 .execute(conn)?;
         }
+
+        let new_transaction_fee = NewTransactionFee {
+            transaction_id_hex: &transaction_id.to_string(),
+            value: tx_proposal.fee() as i64,
+            token_id: *Mob::ID as i64,
+        };
+
         TransactionLog::get(&transaction_id.to_string(), conn)
     }
 
@@ -487,29 +428,29 @@ impl TransactionLogModel for TransactionLog {
         finalized_block_index: u64,
         conn: &Conn,
     ) -> Result<(), WalletDbError> {
-        use crate::db::schema::{transaction_logs, transaction_txo_types};
+        // use crate::db::schema::{transaction_logs, transaction_txo_types};
 
-        // Find all transaction_logs that are BUILT or PENDING that are associated
-        // with the txo id when it is used as an input.
-        // Update the status to SUCCEEDED and update the finalized_block_index.
-        let transaction_log_ids: Vec<String> = transaction_logs::table
-            .inner_join(transaction_txo_types::table.on(
-                transaction_logs::transaction_id_hex.eq(transaction_txo_types::transaction_id_hex),
-            ))
-            .filter(transaction_txo_types::txo_id_hex.eq(txo_id_hex))
-            .filter(transaction_logs::status.eq_any(vec![TX_STATUS_BUILT, TX_STATUS_PENDING]))
-            .select(transaction_logs::transaction_id_hex)
-            .load(conn)?;
+        // // Find all transaction_logs that are BUILT or PENDING that are associated
+        // // with the txo id when it is used as an input.
+        // // Update the status to SUCCEEDED and update the finalized_block_index.
+        // let transaction_log_ids: Vec<String> = transaction_logs::table
+        //     .inner_join(transaction_txo_types::table.on(
+        //         transaction_logs::transaction_id_hex.eq(transaction_txo_types::
+        // transaction_id_hex),     ))
+        //     .filter(transaction_txo_types::txo_id_hex.eq(txo_id_hex))
+        //     .filter(transaction_logs::status.eq_any(vec![TX_STATUS_BUILT,
+        // TX_STATUS_PENDING]))     .select(transaction_logs::
+        // transaction_id_hex)     .load(conn)?;
 
-        diesel::update(
-            transaction_logs::table
-                .filter(transaction_logs::transaction_id_hex.eq_any(transaction_log_ids)),
-        )
-        .set((
-            transaction_logs::status.eq(TX_STATUS_SUCCEEDED),
-            transaction_logs::finalized_block_index.eq(finalized_block_index as i64),
-        ))
-        .execute(conn)?;
+        // diesel::update(
+        //     transaction_logs::table
+        //         .filter(transaction_logs::transaction_id_hex.
+        // eq_any(transaction_log_ids)), )
+        // .set((
+        //     transaction_logs::status.eq(TX_STATUS_SUCCEEDED),
+        //     transaction_logs::finalized_block_index.eq(finalized_block_index as i64),
+        // ))
+        // .execute(conn)?;
 
         Ok(())
     }
@@ -518,28 +459,29 @@ impl TransactionLogModel for TransactionLog {
         txos: &[Txo],
         conn: &Conn,
     ) -> Result<(), WalletDbError> {
-        use crate::db::schema::{transaction_logs, transaction_txo_types};
+        // use crate::db::schema::{transaction_logs, transaction_txo_types};
 
-        let txo_ids: Vec<String> = txos.iter().map(|txo| txo.txo_id_hex.clone()).collect();
+        // let txo_ids: Vec<String> = txos.iter().map(|txo|
+        // txo.txo_id_hex.clone()).collect();
 
-        // Find all transaction_logs that are BUILT or PENDING that are associated
-        // with the txo id when it is used as an input.
-        // Update the status to FAILED
-        let transaction_log_ids: Vec<String> = transaction_logs::table
-            .inner_join(transaction_txo_types::table.on(
-                transaction_logs::transaction_id_hex.eq(transaction_txo_types::transaction_id_hex),
-            ))
-            .filter(transaction_txo_types::txo_id_hex.eq_any(txo_ids))
-            .filter(transaction_logs::status.eq_any(vec![TX_STATUS_BUILT, TX_STATUS_PENDING]))
-            .select(transaction_logs::transaction_id_hex)
-            .load(conn)?;
+        // // Find all transaction_logs that are BUILT or PENDING that are associated
+        // // with the txo id when it is used as an input.
+        // // Update the status to FAILED
+        // let transaction_log_ids: Vec<String> = transaction_logs::table
+        //     .inner_join(transaction_txo_types::table.on(
+        //         transaction_logs::transaction_id_hex.eq(transaction_txo_types::
+        // transaction_id_hex),     ))
+        //     .filter(transaction_txo_types::txo_id_hex.eq_any(txo_ids))
+        //     .filter(transaction_logs::status.eq_any(vec![TX_STATUS_BUILT,
+        // TX_STATUS_PENDING]))     .select(transaction_logs::
+        // transaction_id_hex)     .load(conn)?;
 
-        diesel::update(
-            transaction_logs::table
-                .filter(transaction_logs::transaction_id_hex.eq_any(transaction_log_ids)),
-        )
-        .set((transaction_logs::status.eq(TX_STATUS_FAILED),))
-        .execute(conn)?;
+        // diesel::update(
+        //     transaction_logs::table
+        //         .filter(transaction_logs::transaction_id_hex.
+        // eq_any(transaction_log_ids)), )
+        // .set((transaction_logs::status.eq(TX_STATUS_FAILED),))
+        // .execute(conn)?;
 
         Ok(())
     }

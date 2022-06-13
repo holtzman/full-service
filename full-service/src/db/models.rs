@@ -3,8 +3,8 @@
 //! DB Models
 
 use super::schema::{
-    accounts, assigned_subaddresses, gift_codes, transaction_logs, transaction_txo_types, txos,
-    view_only_accounts, view_only_subaddresses, view_only_txos,
+    accounts, assigned_subaddresses, gift_codes, transaction_fees, transaction_logs,
+    transaction_txo_types, txos, view_only_accounts, view_only_subaddresses, view_only_txos,
 };
 
 use serde::Serialize;
@@ -354,25 +354,17 @@ pub struct NewAssignedSubaddress<'a> {
 /// The status of a sent transaction OR a received transaction output.
 #[derive(Clone, Serialize, Associations, Identifiable, Queryable, PartialEq, Debug)]
 #[belongs_to(Account, foreign_key = "account_id_hex")]
-#[belongs_to(AssignedSubaddress, foreign_key = "assigned_subaddress_b58")]
 #[primary_key(id)]
 #[table_name = "transaction_logs"]
 pub struct TransactionLog {
     pub id: i32,
     pub transaction_id_hex: String,
     pub account_id_hex: String,
-    pub assigned_subaddress_b58: Option<String>,
-    pub value: i64,
-    pub fee: Option<i64>,
-    // Statuses: built, pending, succeeded, failed
-    pub status: String,
-    pub sent_time: Option<i64>,
     pub submitted_block_index: Option<i64>,
+    pub tombstone_block_index: Option<i64>,
     pub finalized_block_index: Option<i64>,
-    pub comment: String, // empty string for nullable
-    // Directions: sent, received
-    pub direction: String,
-    pub tx: Option<Vec<u8>>,
+    pub comment: String,
+    pub tx: Vec<u8>,
 }
 
 /// A structure that can be inserted to create a new TransactionLog entity.
@@ -381,16 +373,11 @@ pub struct TransactionLog {
 pub struct NewTransactionLog<'a> {
     pub transaction_id_hex: &'a str,
     pub account_id_hex: &'a str,
-    pub assigned_subaddress_b58: Option<&'a str>,
-    pub value: i64,
-    pub fee: Option<i64>,
-    pub status: &'a str,
-    pub sent_time: Option<i64>,
     pub submitted_block_index: Option<i64>,
+    pub tombstone_block_index: Option<i64>,
     pub finalized_block_index: Option<i64>,
     pub comment: &'a str,
-    pub direction: &'a str,
-    pub tx: Option<&'a [u8]>,
+    pub tx: &'a [u8],
 }
 
 #[derive(Clone, Serialize, Associations, Identifiable, Queryable, PartialEq, Debug)]
@@ -401,7 +388,6 @@ pub struct NewTransactionLog<'a> {
 pub struct TransactionTxoType {
     pub transaction_id_hex: String,
     pub txo_id_hex: String,
-    // Statuses: input, output, change
     pub transaction_txo_type: String,
 }
 
@@ -411,6 +397,24 @@ pub struct NewTransactionTxoType<'a> {
     pub transaction_id_hex: &'a str,
     pub txo_id_hex: &'a str,
     pub transaction_txo_type: &'a str,
+}
+
+#[derive(Clone, Serialize, Associations, Identifiable, Queryable, PartialEq, Debug)]
+#[belongs_to(TransactionLog, foreign_key = "transaction_id_hex")]
+#[table_name = "transaction_fees"]
+#[primary_key(transaction_id_hex)]
+pub struct TransactionFee {
+    pub transaction_id_hex: String,
+    pub value: i64,
+    pub token_id: i64,
+}
+
+#[derive(Insertable)]
+#[table_name = "transaction_fees"]
+pub struct NewTransactionFee<'a> {
+    pub transaction_id_hex: &'a str,
+    pub value: i64,
+    pub token_id: i64,
 }
 
 #[derive(Clone, Serialize, Associations, Identifiable, Queryable, PartialEq, Debug)]

@@ -402,50 +402,7 @@ fn sync_account_next_chunk(
                 block_index,
                 account_id_hex,
                 conn,
-            )?;
-
-            // TODO: What's the best way to get the assigned_subaddress_b58?
-            // Do we even care about saving this in the database at all? We
-            // should be able to look up any relevant information about the
-            // txo directly from the txo table. This will also hinder us
-            // from supporting recoverable transaction history in the case that
-            // there are txo's that go to multiple different subaddresses in the
-            // same transaction.
-            // My thoughts are to remove assigned_subaddress_b58 entirely from
-            // this table and use the TransactionTxoType table to look up info
-            // about each of the txo's independently, since each on could
-            // be at a different subaddress.
-            // In fact, do we even want to be creating a TransactionLog for
-            // individual txo's at all, since all of this information is
-            // derivable from the txo's table? The only thing that's necessary
-            // to store in the database WRT a transaction is when we send,
-            // because that requires extra meta data that isn't derivable
-            // from the ledger.
-            //
-            // TL;DR
-            // Reconsider creating a TransactionLog in favor of deriving the
-            // information from the txo's table when necessary, and only
-            // store information about sent transactions.
-
-            let assigned_subaddress_b58: Option<String> = match subaddress_index {
-                None => None,
-                Some(subaddress_index) => {
-                    let subaddress = account_key.subaddress(subaddress_index);
-                    let subaddress_b58 = b58_encode_public_address(&subaddress)?;
-                    Some(subaddress_b58)
-                }
-            };
-
-            if amount.token_id == Mob::ID {
-                TransactionLog::log_received(
-                    account_id_hex,
-                    assigned_subaddress_b58.as_deref(),
-                    txo_id.as_str(),
-                    amount,
-                    block_index as u64,
-                    conn,
-                )?;
-            }
+            )?; 
         }
 
         // Match key images to mark existing unspent transactions as spent.
@@ -462,11 +419,11 @@ fn sync_account_next_chunk(
         let num_spent_txos = spent_txos.len();
         for (block_index, txo_id_hex) in &spent_txos {
             Txo::update_to_spent(txo_id_hex, *block_index as u64, conn)?;
-            TransactionLog::update_tx_logs_associated_with_txo_to_succeeded(
-                txo_id_hex,
-                *block_index,
-                conn,
-            )?;
+            // TransactionLog::update_tx_logs_associated_with_txo_to_succeeded(
+            //     txo_id_hex,
+            //     *block_index,
+            //     conn,
+            // )?;
         }
 
         let txos_exceeding_pending_block_index = Txo::list_pending_exceeding_block_index(
@@ -475,10 +432,10 @@ fn sync_account_next_chunk(
             None,
             conn,
         )?;
-        TransactionLog::update_tx_logs_associated_with_txos_to_failed(
-            &txos_exceeding_pending_block_index,
-            conn,
-        )?;
+        // TransactionLog::update_tx_logs_associated_with_txos_to_failed(
+        //     &txos_exceeding_pending_block_index,
+        //     conn,
+        // )?;
 
         Txo::update_txos_exceeding_pending_tombstone_block_index_to_unspent(
             end_block_index + 1,

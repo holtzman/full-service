@@ -87,29 +87,26 @@ impl TransactionLog {
         transaction_log: &db::models::TransactionLog,
         associated_txos: &AssociatedTxos,
     ) -> Self {
-        let assigned_address_id = transaction_log.assigned_subaddress_b58.clone();
         Self {
             object: "transaction_log".to_string(),
             transaction_log_id: transaction_log.transaction_id_hex.clone(),
-            direction: transaction_log.direction.clone(),
+            direction: "".to_string(),
             is_sent_recovered: None, // FIXME: WS-16 "Is Sent Recovered"
             account_id: transaction_log.account_id_hex.clone(),
-            assigned_address_id,
-            value_pmob: (transaction_log.value as u64).to_string(),
-            fee_pmob: transaction_log.fee.map(|x| (x as u64).to_string()),
+            assigned_address_id: Some("".to_string()),
+            value_pmob: "".to_string(),
+            fee_pmob: Some("".to_string()),
             submitted_block_index: transaction_log
                 .submitted_block_index
                 .map(|b| (b as u64).to_string()),
             finalized_block_index: transaction_log
                 .finalized_block_index
                 .map(|b| (b as u64).to_string()),
-            status: transaction_log.status.clone(),
+            status: "".to_string(),
             input_txos: associated_txos.inputs.iter().map(TxoAbbrev::new).collect(),
             output_txos: associated_txos.outputs.iter().map(TxoAbbrev::new).collect(),
             change_txos: associated_txos.change.iter().map(TxoAbbrev::new).collect(),
-            sent_time: transaction_log
-                .sent_time
-                .map(|t| Utc.timestamp(t, 0).to_string()),
+            sent_time: Some("".to_string()), // FIXME: WS-16 "Sent Time"
             comment: transaction_log.comment.clone(),
             failure_code: None,    // FIXME: WS-17 Failiure code
             failure_message: None, // FIXME: WS-17 Failure message
