@@ -2,12 +2,11 @@
 
 //! DB impl for the Transaction model.
 
-use chrono::Utc;
 use diesel::prelude::*;
 use mc_common::HashMap;
 use mc_crypto_digestible::{Digestible, MerlinTranscript};
 use mc_mobilecoind::payments::TxProposal;
-use mc_transaction_core::{tokens::Mob, tx::Tx, Amount, Token};
+use mc_transaction_core::{tokens::Mob, tx::Tx, Token};
 use std::fmt;
 
 use crate::db::{
@@ -394,6 +393,10 @@ impl TransactionLogModel for TransactionLog {
             value: tx_proposal.fee() as i64,
             token_id: *Mob::ID as i64,
         };
+
+        diesel::insert_into(crate::db::schema::transaction_fees::table)
+            .values(&new_transaction_fee)
+            .execute(conn)?;
 
         TransactionLog::get(&transaction_id.to_string(), conn)
     }
